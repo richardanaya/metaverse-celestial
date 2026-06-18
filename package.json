@@ -8,11 +8,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/richardanaya/metaverse-celestials.git"
+    "url": "git+https://github.com/richardanaya/metaverse-celestial.git"
   },
-  "homepage": "https://github.com/richardanaya/metaverse-celestials#readme",
+  "homepage": "https://github.com/richardanaya/metaverse-celestial#readme",
   "bugs": {
-    "url": "https://github.com/richardanaya/metaverse-celestials/issues"
+    "url": "https://github.com/richardanaya/metaverse-celestial/issues"
   },
   "types": "./index.d.ts",
   "exports": {
