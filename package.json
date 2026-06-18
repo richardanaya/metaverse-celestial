@@ -1,0 +1,45 @@
+{
+  "name": "metaverse-celestials",
+  "version": "0.1.0",
+  "description": "Shader-based moon, planets, and stars for Three.js metaverse skies",
+  "type": "module",
+  "sideEffects": false,
+  "author": "Richard Anaya",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/richardanaya/metaverse-celestials.git"
+  },
+  "homepage": "https://github.com/richardanaya/metaverse-celestials#readme",
+  "bugs": {
+    "url": "https://github.com/richardanaya/metaverse-celestials/issues"
+  },
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "LICENSE",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "three": ">=0.160.0"
+  },
+  "keywords": [
+    "three",
+    "threejs",
+    "sky",
+    "stars",
+    "moon",
+    "planets",
+    "metaverse",
+    "webgl",
+    "shader"
+  ]
+}

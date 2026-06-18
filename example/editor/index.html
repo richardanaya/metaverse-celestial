@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Metaverse Celestials Editor</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three/examples/jsm/",
+          "metaverse-celestials": "../../index.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main id="app">
+      <section class="panel" aria-label="Celestials editor controls">
+        <div class="title-block">
+          <p class="eyebrow">metaverse-celestials</p>
+          <h1>Celestials Editor</h1>
+          <p>One shader dome for procedural moon, planets, and stars.</p>
+        </div>
+
+        <div class="control-group">
+          <label class="toggle-label"><input id="visible" type="checkbox" checked /> Show Bodies</label>
+        </div>
+
+        <div class="control-group">
+          <label>Sun</label>
+          <p class="hint">Advanced: the sun direction lights the Moon. Use the Phase slider for common cases.</p>
+          <label class="sub-label" for="sun-elevation">Elevation <span id="sun-elevation-value">30°</span></label>
+          <input id="sun-elevation" type="range" min="-10" max="90" step="1" value="30" />
+          <label class="sub-label" for="sun-azimuth">Azimuth <span id="sun-azimuth-value">28°</span></label>
+          <input id="sun-azimuth" type="range" min="-180" max="180" step="1" value="28" />
+        </div>
+
+        <div class="control-group">
+          <label>Moon</label>
+          <label class="sub-label" for="moon-phase">Phase <span id="moon-phase-value">Gibbous</span></label>
+          <input id="moon-phase" type="range" min="0" max="1" step="0.01" value="0.62" />
+          <label class="sub-label" for="moon-elevation">Elevation <span id="moon-elevation-value">34°</span></label>
+          <input id="moon-elevation" type="range" min="-10" max="80" step="1" value="34" />
+          <label class="sub-label" for="moon-azimuth">Azimuth <span id="moon-azimuth-value">-62°</span></label>
+          <input id="moon-azimuth" type="range" min="-180" max="180" step="1" value="-62" />
+          <label class="sub-label" for="moon-size">Size <span id="moon-size-value">18.0</span></label>
+          <input id="moon-size" type="range" min="6" max="160" step="0.5" value="18" />
+          <label class="sub-label" for="moon-glow">Glow <span id="moon-glow-value">22%</span></label>
+          <input id="moon-glow" type="range" min="0" max="1" step="0.01" value="0.22" />
+          <label class="sub-label" for="moon-horizon-boost">Horizon Boost <span id="moon-horizon-boost-value">100%</span></label>
+          <input id="moon-horizon-boost" type="range" min="0" max="1" step="0.01" value="1" />
+        </div>
+
+        <div class="control-group">
+          <label class="toggle-label"><input id="planets-visible" type="checkbox" checked /> Planets</label>
+          <label class="sub-label" for="planet-scale">Scale <span id="planet-scale-value">1.00</span></label>
+          <input id="planet-scale" type="range" min="0.25" max="3" step="0.05" value="1" />
+          <label class="sub-label" for="planet-glow">Glow <span id="planet-glow-value">100%</span></label>
+          <input id="planet-glow" type="range" min="0" max="2" step="0.01" value="1" />
+        </div>
+
+        <div class="control-group">
+          <label class="toggle-label"><input id="stars-visible" type="checkbox" checked /> Stars</label>
+          <label class="sub-label" for="star-opacity">Opacity <span id="star-opacity-value">85%</span></label>
+          <input id="star-opacity" type="range" min="0" max="1" step="0.01" value="0.85" />
+          <label class="sub-label" for="star-size">Size <span id="star-size-value">1.00</span></label>
+          <input id="star-size" type="range" min="0.25" max="3" step="0.05" value="1" />
+        </div>
+      </section>
+      <canvas id="scene"></canvas>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
