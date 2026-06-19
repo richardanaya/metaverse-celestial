@@ -29,6 +29,130 @@ function sunDirFromPhase(moonDir, phase) {
   return sun.normalize();
 }
 
+// --- Star field (THREE.Points) ---------------------------------------------
+// The original dome shader ran a 27-iteration cellular star search *twice*
+// (grids 165 + 330 = 54 iterations) plus an 8-octave Milky Way on every sky
+// pixel, every frame — including broad daylight when stars are invisible.
+// That full-screen loop was the dominant cost of the celestial dome, especially
+// on D3D11/ANGLE and mobile GL.
+//
+// Stars are static points (only twinkle was time-driven, and we've dropped it),
+// so the state-of-the-art fix (cf. Hauke Thiessen, "Creating Starry Nights
+// without Textures") is to render them as point sprites: only pixels that
+// actually contain a star do any work, and the stars stay crisp at any
+// resolution/movement (a baked cubemap would shimmer/sub-pixel them away).
+// The Milky Way is continuous nebular content, not discrete points, so it stays
+// procedural in the dome shader (night-gated).
+
+function mulberry32(seed) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(s ^ (s >>> 15), s | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Generate `count` stars uniformly on the unit sphere with a seeded RNG, each
+// carrying a precomputed size/brightness/temperature. `sizeMul`/`brightMul`
+// match the old shader's per-tier multipliers (bright tier 1.0/1.0, faint 0.6/0.5).
+// The magnitude distribution pow(rand, 4.5) reproduces "rare bright, common faint".
+// Positions are baked at `radius` so the Points object (parented to the dome
+// group, which follows the camera) projects correctly.
+function generateStarAttributes(rng, count, sizeMul, brightMul, radius) {
+  const positions = new Float32Array(count * 3);
+  const sizes = new Float32Array(count);
+  const brights = new Float32Array(count);
+  const temps = new Float32Array(count);
+  for (let i = 0; i < count; i += 1) {
+    // Uniform on sphere: z = 2v-1, theta = 2πu (avoids pole pinch).
+    const u = rng();
+    const v = rng();
+    const theta = u * Math.PI * 2;
+    const z = v * 2 - 1;
+    const r = Math.sqrt(Math.max(0.0, 1 - z * z));
+    positions[i * 3] = r * Math.cos(theta) * radius;
+    positions[i * 3 + 1] = z * radius;
+    positions[i * 3 + 2] = r * Math.sin(theta) * radius;
+    const mag = Math.pow(rng(), 4.5);
+    sizes[i] = sizeMul * (0.6 + mag * 2.2);
+    brights[i] = brightMul * (0.4 + mag * 0.9);
+    temps[i] = rng();
+  }
+  return { positions, sizes, brights, temps };
+}
+
+// Port of the dome shader's blackbody-ish stellar color (0..1 temperature).
+const starFieldVertexShader = /* glsl */`
+  attribute float aSize;
+  attribute float aBright;
+  attribute float aTemp;
+  uniform float uStarSize;
+  uniform float uStarOpacity;
+  uniform float uStarsVisible;
+  uniform float uBasePixels;
+  uniform float uPixelRatio;
+  uniform vec3 uSkySunDir;
+  varying float vBright;
+  varying float vTemp;
+  varying float vHorizon;
+  void main() {
+    vec3 dir = normalize(position);
+    // Skip entirely during daytime (sky sun above horizon) or when hidden —
+    // stars are invisible against the lit sky, so paying for 20k points at noon
+    // would recreate the very cost we're trying to avoid.
+    if (uStarsVisible < 0.5 || uSkySunDir.y > 0.0) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      gl_PointSize = 0.0;
+      return;
+    }
+    float horizon = smoothstep(-0.04, 0.16, dir.y);
+    if (horizon <= 0.0) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      gl_PointSize = 0.0;
+      return;
+    }
+    vBright = aBright * uStarOpacity;
+    vTemp = aTemp;
+    vHorizon = horizon;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mv;
+    // All stars sit at the same radius from the camera (the group follows the
+    // camera), so a constant pixel size is correct — no perspective attenuation.
+    gl_PointSize = uBasePixels * uStarSize * aSize * uPixelRatio;
+  }
+`;
+
+const starFieldFragmentShader = /* glsl */`
+  precision mediump float;
+  varying float vBright;
+  varying float vTemp;
+  varying float vHorizon;
+
+  vec3 starColor(float t) {
+    const vec3 c0 = vec3(1.00, 0.52, 0.32); // red / orange
+    const vec3 c1 = vec3(1.00, 0.84, 0.62); // orange / yellow
+    const vec3 c2 = vec3(1.00, 0.97, 0.92); // yellow-white
+    const vec3 c3 = vec3(0.78, 0.86, 1.00); // blue-white / hot
+    if (t < 0.34) return mix(c0, c1, t / 0.34);
+    if (t < 0.67) return mix(c1, c2, (t - 0.34) / 0.33);
+    return mix(c2, c3, (t - 0.67) / 0.33);
+  }
+
+  void main() {
+    vec2 c = gl_PointCoord * 2.0 - 1.0;
+    float r2 = dot(c, c);
+    if (r2 > 1.0) discard;
+    float core = exp(-r2 / 0.18);       // soft disc
+    float halo = exp(-r2 / 0.9) * 0.35; // faint halo
+    float intensity = (core + halo) * vBright * vHorizon;
+    if (intensity <= 0.002) discard;
+    vec3 col = starColor(vTemp) * intensity;
+    gl_FragColor = vec4(col, clamp(intensity, 0.0, 1.0));
+  }
+`;
+
 function createCelestialMaterial(settings) {
   return new THREE.ShaderMaterial({
     transparent: true,
@@ -40,6 +164,14 @@ function createCelestialMaterial(settings) {
     uniforms: {
       uTime: { value: 0 },
       uSunDir: { value: sunDirFromPhase(directionFromAngles(settings.moonElevation, settings.moonAzimuth), settings.moonPhase ?? 0.62) },
+      // The SKY's sun direction (separate from uSunDir, which is the moon-phase
+      // sun used to light the lunar disc). The host passes this in each frame
+      // so the star/Milky Way pipeline can be skipped while the sky sun is up —
+      // stars are invisible against the lit daytime sky (additive blend), so
+      // computing a 54-iteration star loop + 8-octave Milky Way per pixel at
+      // noon was pure waste and the dominant cost of this dome. Default to a
+      // daytime value so stars stay off until the host provides the real sky sun.
+      uSkySunDir: { value: new THREE.Vector3(0.45, 0.86, 0.24).normalize() },
       uMoonDir: { value: directionFromAngles(settings.moonElevation, settings.moonAzimuth) },
       uMoonSize: { value: settings.moonSize },
       uMoonGlow: { value: settings.moonGlow },
@@ -47,9 +179,6 @@ function createCelestialMaterial(settings) {
       uPlanetsVisible: { value: settings.planetsVisible ? 1 : 0 },
       uPlanetScale: { value: settings.planetScale },
       uPlanetGlow: { value: settings.planetGlow },
-      uStarsVisible: { value: settings.starsVisible ? 1 : 0 },
-      uStarOpacity: { value: settings.starOpacity },
-      uStarSize: { value: settings.starSize },
       uPlanetDir: { value: [
         directionFromAngles(18, 38),
         directionFromAngles(26, 92),
@@ -93,6 +222,7 @@ function createCelestialMaterial(settings) {
       varying vec3 vDir;
       uniform float uTime;
       uniform vec3 uSunDir;
+      uniform vec3 uSkySunDir;
       uniform vec3 uMoonDir;
       uniform float uMoonSize;
       uniform float uMoonGlow;
@@ -100,9 +230,6 @@ function createCelestialMaterial(settings) {
       uniform float uPlanetsVisible;
       uniform float uPlanetScale;
       uniform float uPlanetGlow;
-      uniform float uStarsVisible;
-      uniform float uStarOpacity;
-      uniform float uStarSize;
       uniform vec3 uPlanetDir[4];
       uniform float uPlanetSize[4];
       uniform float uPlanetGlowBase[4];
@@ -113,13 +240,6 @@ function createCelestialMaterial(settings) {
       const float PI = 3.141592653589793;
 
       // ---- hashing ----------------------------------------------------------
-      float hash11(float p) {
-        p = fract(p * 0.1031);
-        p *= p + 33.33;
-        p *= p + p;
-        return fract(p);
-      }
-
       vec3 hash33(vec3 p) {
         p = fract(p * vec3(443.8975, 441.4231, 437.5125));
         p += dot(p, p.yzx + 19.19 + 7.31);
@@ -237,17 +357,6 @@ function createCelestialMaterial(settings) {
         v = cross(n, u);
       }
 
-      // blackbody-ish stellar color from a 0..1 temperature parameter
-      vec3 starColor(float t) {
-        const vec3 c0 = vec3(1.00, 0.52, 0.32); // red / orange
-        const vec3 c1 = vec3(1.00, 0.84, 0.62); // orange / yellow
-        const vec3 c2 = vec3(1.00, 0.97, 0.92); // yellow-white
-        const vec3 c3 = vec3(0.78, 0.86, 1.00); // blue-white / hot
-        if (t < 0.34) return mix(c0, c1, t / 0.34);
-        if (t < 0.67) return mix(c1, c2, (t - 0.34) / 0.33);
-        return mix(c2, c3, (t - 0.67) / 0.33);
-      }
-
       // ---- Milky Way band ---------------------------------------------------
       vec3 milkyWay(vec3 dir) {
         vec3 gN = normalize(vec3(0.18, 0.42, 0.89));
@@ -262,68 +371,18 @@ function createCelestialMaterial(settings) {
         return col * density * 0.20;
       }
 
-      // ---- stars (3D cellular placement, no pole pinching) ------------------
-      vec4 starLayer(vec3 dir, float grid, float densityThresh, float sizeMul, float brightMul) {
-        vec3 base = floor(dir * grid);
-        vec3 u, v;
-        orthonormalBasis(dir, u, v);
-        vec4 acc = vec4(0.0);
-        for (int ix = 0; ix < 3; ix++) {
-          for (int iy = 0; iy < 3; iy++) {
-            for (int iz = 0; iz < 3; iz++) {
-              vec3 o = vec3(float(ix) - 1.0, float(iy) - 1.0, float(iz) - 1.0);
-              vec3 cell = base + o;
-              vec3 h = hash33(cell * 1.37 + 7.1);
-              if (h.x < densityThresh) continue;
-              vec3 sp = (cell + 0.5 + (h - 0.5) * 0.78) / grid;
-              vec3 sd = normalize(sp);
-              float cs = dot(dir, sd);
-              if (cs < 0.9985) continue; // cull far cells early
-              vec3 delta = sd - dir;
-              float pu = dot(delta, u);
-              float pv = dot(delta, v);
-              // magnitude: rare bright stars, common faint ones
-              float mag = pow(h.y, 4.5);
-              float r = (0.00045 + mag * 0.0022) * sizeMul * uStarSize;
-              float r2 = r * r;
-              float core = exp(-(pu * pu + pv * pv) / r2);
-              // diffraction spikes for the brightest stars
-              float spike = 0.0;
-              if (mag > 0.6) {
-                float k = smoothstep(0.6, 0.95, mag);
-                float sx = r * 7.0;
-                float sy = r * 0.55;
-                spike = k * (exp(-pu * pu / (sx * sx)) * exp(-pv * pv / (sy * sy))
-                          + exp(-pv * pv / (sx * sx)) * exp(-pu * pu / (sy * sy)));
-              }
-              // soft halo
-              float halo = mag * exp(-(pu * pu + pv * pv) / (r2 * 12.0)) * 0.35;
-              float tw = hash11(h.z * 53.1 + 1.3);
-              float twinkle = 0.72 + 0.28 * sin(uTime * (0.5 + tw * 2.2) + tw * 31.0)
-                                  * sin(uTime * (1.7 + tw * 1.3) + tw * 17.0);
-              float intensity = (core + spike * 0.55 + halo) * (0.4 + mag * 0.9) * brightMul * twinkle;
-              vec3 col = starColor(h.z);
-              acc.rgb += col * intensity;
-              acc.a = max(acc.a, clamp(intensity, 0.0, 1.0));
-            }
-          }
-        }
-        return acc;
-      }
-
-      vec4 renderStars(vec3 dir) {
-        if (uStarsVisible < 0.5) return vec4(0.0);
+      // Stars are now rendered as a separate THREE.Points object (see
+      // createStarField) — only pixels that contain a star do any work, instead
+      // of the old 54-iteration cellular search running on every sky pixel.
+      // The Milky Way stays procedural here: it's continuous nebular content
+      // (not discrete points) and is night-gated by uSkySunDir.
+      vec4 renderMilkyWay(vec3 dir) {
+        if (uSkySunDir.y > 0.0) return vec4(0.0);
         float horizon = smoothstep(-0.04, 0.16, dir.y);
         if (horizon <= 0.0) return vec4(0.0);
         vec3 mw = milkyWay(dir) * horizon;
-        // bright / mid tier
-        vec4 a = starLayer(dir, 165.0, 0.977, 1.0, 1.0);
-        // faint dust tier
-        vec4 b = starLayer(dir, 330.0, 0.992, 0.6, 0.5);
-        vec3 rgb = (a.rgb + b.rgb) * uStarOpacity * horizon + mw;
-        float alpha = max(a.a, b.a) * uStarOpacity * horizon;
-        alpha = max(alpha, clamp(length(mw) * 2.2, 0.0, 1.0) * uStarOpacity * horizon);
-        return vec4(rgb, alpha);
+        float alpha = clamp(length(mw) * 2.2, 0.0, 1.0) * horizon;
+        return vec4(mw, alpha);
       }
 
       // ---- moon -------------------------------------------------------------
@@ -523,7 +582,7 @@ function createCelestialMaterial(settings) {
 
       void main() {
         vec3 dir = normalize(vDir);
-        vec4 color = renderStars(dir);
+        vec4 color = renderMilkyWay(dir);
         composite(color, renderPlanet(dir, 0));
         composite(color, renderPlanet(dir, 1));
         composite(color, renderPlanet(dir, 2));
@@ -537,9 +596,10 @@ function createCelestialMaterial(settings) {
 }
 
 export class CelestialBodies {
-  constructor({ scene, camera, radius = DEFAULT_RADIUS } = {}) {
+  constructor({ scene, camera, renderer, radius = DEFAULT_RADIUS } = {}) {
     this.scene = scene;
     this.camera = camera;
+    this.renderer = renderer;
     this.radius = radius;
     this.group = new THREE.Group();
     this.group.name = 'celestial-bodies';
@@ -568,8 +628,71 @@ export class CelestialBodies {
     this.dome.name = 'shader-celestial-dome';
     this.dome.renderOrder = -6;
     this.group.add(this.dome);
+    this._buildStarField();
     this.scene.add(this.group);
     return this;
+  }
+
+  // Build the THREE.Points star field. Stars are static, so positions are
+  // generated once on the CPU and uploaded; only `uStarSize`/`uStarOpacity`/
+  // `uStarsVisible`/`uSkySunDir` uniforms are live. Two tiers (bright + faint)
+  // match the old shader's density/size character; magnitude distribution
+  // pow(rand, 4.5) reproduces "rare bright, common faint".
+  _buildStarField() {
+    const rng = mulberry32(1337);
+    const bright = generateStarAttributes(rng, 9000, 1.0, 1.0, this.radius);
+    const faint = generateStarAttributes(rng, 12000, 0.6, 0.5, this.radius);
+    const count = bright.positions.length / 3 + faint.positions.length / 3;
+    const positions = new Float32Array(count * 3);
+    const sizes = new Float32Array(count);
+    const brights = new Float32Array(count);
+    const temps = new Float32Array(count);
+    let o = 0;
+    for (const src of [bright, faint]) {
+      const n = src.positions.length / 3;
+      for (let i = 0; i < n; i += 1) {
+        positions[o * 3] = src.positions[i * 3];
+        positions[o * 3 + 1] = src.positions[i * 3 + 1];
+        positions[o * 3 + 2] = src.positions[i * 3 + 2];
+        sizes[o] = src.sizes[i];
+        brights[o] = src.brights[i];
+        temps[o] = src.temps[i];
+        o += 1;
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+    geo.setAttribute('aBright', new THREE.BufferAttribute(brights, 1));
+    geo.setAttribute('aTemp', new THREE.BufferAttribute(temps, 1));
+    // Points sit on the dome sphere; frustum culling would use a sphere at the
+    // camera (the group follows the camera) so disable it — the field is always
+    // "in view" as the sky.
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), this.radius);
+    this.starMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uStarSize: { value: this.settings.starSize },
+        uStarOpacity: { value: this.settings.starOpacity },
+        uStarsVisible: { value: this.settings.starsVisible ? 1 : 0 },
+        uBasePixels: { value: 4.4 }, // tuned so default starSize (~0.25 in host) gives ~3px bright stars
+        uPixelRatio: { value: this.renderer ? this.renderer.getPixelRatio() : (typeof window !== 'undefined' ? window.devicePixelRatio : 1) },
+        // Default to daytime so stars stay off until the host calls setSkySun.
+        uSkySunDir: { value: new THREE.Vector3(0.45, 0.86, 0.24).normalize() },
+      },
+      vertexShader: starFieldVertexShader,
+      fragmentShader: starFieldFragmentShader,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    this.stars = new THREE.Points(geo, this.starMaterial);
+    this.stars.name = 'celestial-stars';
+    this.stars.frustumCulled = false;
+    // Draw just before the dome so the dome's moon/planets add over the stars
+    // (reads as the moon sitting in front of the star field).
+    this.stars.renderOrder = -7;
+    this.group.add(this.stars);
   }
 
   setVisible(visible) {
@@ -581,6 +704,17 @@ export class CelestialBodies {
     Object.assign(this.settings, options);
     if (!this.material) return;
     this.material.uniforms.uSunDir.value.copy(directionFromAngles(this.settings.sunElevation, this.settings.sunAzimuth));
+  }
+
+  // Feed the SKY's real sun direction (the one that lights the Preetham sky / terrain)
+  // so the star + Milky Way pipeline can be skipped during daytime. This is distinct
+  // from setSun(), which drives the moon-phase lighting sun. The host should call
+  // this whenever the sky sun moves (e.g. each frame from its environment-light sync).
+  setSkySun(dir) {
+    // Drive both the dome (for the Milky Way night-gate) and the star field
+    // (so points skip during daytime).
+    if (this.material) this.material.uniforms.uSkySunDir.value.copy(dir).normalize();
+    if (this.starMaterial) this.starMaterial.uniforms.uSkySunDir.value.copy(dir).normalize();
   }
 
   // Drive the lunar phase directly with a 0..1 value:
@@ -617,15 +751,22 @@ export class CelestialBodies {
 
   setStars(options = {}) {
     Object.assign(this.settings, options);
-    if (!this.material) return;
-    this.material.uniforms.uStarsVisible.value = this.settings.starsVisible ? 1 : 0;
-    this.material.uniforms.uStarOpacity.value = this.settings.starOpacity;
-    this.material.uniforms.uStarSize.value = this.settings.starSize;
+    if (this.starMaterial) {
+      this.starMaterial.uniforms.uStarsVisible.value = this.settings.starsVisible ? 1 : 0;
+      this.starMaterial.uniforms.uStarOpacity.value = this.settings.starOpacity;
+      this.starMaterial.uniforms.uStarSize.value = this.settings.starSize;
+    }
   }
 
   update(time = 0) {
     if (this.camera) this.group.position.copy(this.camera.position);
     if (this.material) this.material.uniforms.uTime.value = time;
+    // Keep star point size in sync with the renderer's pixel ratio (the host
+    // may clamp/change it on resize). Cheap uniform write, no per-frame alloc.
+    if (this.starMaterial && this.renderer) {
+      const pr = this.renderer.getPixelRatio();
+      if (this.starMaterial.uniforms.uPixelRatio.value !== pr) this.starMaterial.uniforms.uPixelRatio.value = pr;
+    }
   }
 
   dispose() {

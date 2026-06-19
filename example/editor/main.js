@@ -27,7 +27,10 @@ const ground = new THREE.Mesh(
 ground.rotation.x = -Math.PI / 2;
 scene.add(ground);
 
-const celestials = new CelestialBodies({ scene, camera }).init();
+const celestials = new CelestialBodies({ scene, camera, renderer }).init();
+// Nighttime so the star field + Milky Way render (no Preetham sky in this
+// demo to derive the sun from; a real app calls setSkySun each frame).
+celestials.setSkySun(new THREE.Vector3(0.3, -0.25, 0.4));
 
 bindPanel();
 

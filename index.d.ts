@@ -37,6 +37,8 @@ export class CelestialBodies {
   init(): this;
   setVisible(visible: boolean): void;
   setSun(options?: Partial<Pick<CelestialSettings, 'sunElevation' | 'sunAzimuth'>>): void;
+  /** Feed the SKY's real sun direction so stars/Milky Way are skipped at daytime. Distinct from setSun (moon-phase sun). */
+  setSkySun(dir: THREE.Vector3 | { x: number; y: number; z: number }): void;
   setMoonPhase(phase: number): void;
   setMoon(options?: Partial<Pick<CelestialSettings, 'moonElevation' | 'moonAzimuth' | 'moonSize' | 'moonGlow' | 'moonHorizonBoost'>>): void;
   setPlanets(options?: Partial<Pick<CelestialSettings, 'planetsVisible' | 'planetScale' | 'planetGlow'>>): void;

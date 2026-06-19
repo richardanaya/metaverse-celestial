@@ -27,7 +27,11 @@ const ground = new THREE.Mesh(
 ground.rotation.x = -Math.PI / 2;
 scene.add(ground);
 
-const celestials = new CelestialBodies({ scene, camera }).init();
+const celestials = new CelestialBodies({ scene, camera, renderer }).init();
+// Tell the celestial bodies it's nighttime: a sky-sun below the horizon opens
+// the night-gate so the star field + Milky Way render. (In a real app the host
+// derives this from its Preetham sky and calls setSkySun each frame.)
+celestials.setSkySun(new THREE.Vector3(0.3, -0.25, 0.4));
 const clock = new THREE.Clock();
 
 function resize() {
