@@ -80,7 +80,16 @@ function createCelestialMaterial(settings) {
       }
     `,
     fragmentShader: `
+      // Let the GPU negotiate fragment precision: force highp only where the
+      // device actually has fp32 fragments (desktop/iOS Apple GPUs). Older
+      // Android Adreno/Mali fragment units without native highp would otherwise
+      // fall into slow emulation or clamping under an unconditional highp — one
+      // reason this dome was disproportionately slow on phones but fine on iOS.
+      #ifdef GL_FRAGMENT_PRECISION_HIGH
       precision highp float;
+      #else
+      precision mediump float;
+      #endif
       varying vec3 vDir;
       uniform float uTime;
       uniform vec3 uSunDir;
@@ -166,27 +175,47 @@ function createCelestialMaterial(settings) {
         return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));
       }
 
-      // fractal brownian motion in 3D (smooth, seamless on spheres)
-      float fbm3(vec3 p) {
-        float v = 0.0;
-        float a = 0.5;
-        for (int i = 0; i < 5; i++) {
-          v += a * snoise(p);
-          p = p * 2.02 + vec3(11.7, 3.1, 7.9);
-          a *= 0.5;
-        }
+      // Octave-specialized fractal brownian motion (smooth, seamless on spheres).
+      // The old single fbm3(p, int oct) overload had a *dynamic* loop bound —
+      // 'oct' was a function argument — which ANGLE/fxc refuses to unroll when
+      // transcribed to HLSL, emitting a real dynamic loop whose per-iteration
+      // snoise body (~40 ALU) can't be hoisted or scheduled across iterations.
+      // That's a Windows-Chrome-specific cliff: Metal and Linux-native GL inline
+      // the caller so 'oct' becomes a literal and the loop unrolls. Splitting
+      // into compile-time-constant bounds (3/4/5/6 octaves) lets every backend
+      // unroll, and the fully-unrolled form is also friendlier to mobile GL.
+      float fbm3_3(vec3 p) {
+        float v = 0.0; float a = 0.5;
+        v += a * snoise(p); p = p * 2.02 + vec3(11.7, 3.1, 7.9); a *= 0.5;
+        v += a * snoise(p); p = p * 2.02 + vec3(11.7, 3.1, 7.9); a *= 0.5;
+        v += a * snoise(p);
         return v;
       }
-
-      float fbm3(vec3 p, int oct) {
-        float v = 0.0;
-        float a = 0.5;
-        for (int i = 0; i < 6; i++) {
-          if (i >= oct) break;
-          v += a * snoise(p);
-          p = p * 2.02 + vec3(11.7, 3.1, 7.9);
-          a *= 0.5;
-        }
+      float fbm3_4(vec3 p) {
+        float v = 0.0; float a = 0.5;
+        v += a * snoise(p); p = p * 2.02 + vec3(11.7, 3.1, 7.9); a *= 0.5;
+        v += a * snoise(p); p = p * 2.02 + vec3(11.7, 3.1, 7.9); a *= 0.5;
+        v += a * snoise(p); p = p * 2.02 + vec3(11.7, 3.1, 7.9); a *= 0.5;
+        v += a * snoise(p);
+        return v;
+      }
+      float fbm3_5(vec3 p) {
+        float v = 0.0; float a = 0.5;
+        v += a * snoise(p); p = p * 2.02 + vec3(11.7, 3.1, 7.9); a *= 0.5;
+        v += a * snoise(p); p = p * 2.02 + vec3(11.7, 3.1, 7.9); a *= 0.5;
+        v += a * snoise(p); p = p * 2.02 + vec3(11.7, 3.1, 7.9); a *= 0.5;
+        v += a * snoise(p); p = p * 2.02 + vec3(11.7, 3.1, 7.9); a *= 0.5;
+        v += a * snoise(p);
+        return v;
+      }
+      float fbm3_6(vec3 p) {
+        float v = 0.0; float a = 0.5;
+        v += a * snoise(p); p = p * 2.02 + vec3(11.7, 3.1, 7.9); a *= 0.5;
+        v += a * snoise(p); p = p * 2.02 + vec3(11.7, 3.1, 7.9); a *= 0.5;
+        v += a * snoise(p); p = p * 2.02 + vec3(11.7, 3.1, 7.9); a *= 0.5;
+        v += a * snoise(p); p = p * 2.02 + vec3(11.7, 3.1, 7.9); a *= 0.5;
+        v += a * snoise(p); p = p * 2.02 + vec3(11.7, 3.1, 7.9); a *= 0.5;
+        v += a * snoise(p);
         return v;
       }
 
@@ -224,8 +253,8 @@ function createCelestialMaterial(settings) {
         vec3 gN = normalize(vec3(0.18, 0.42, 0.89));
         float band = dot(dir, gN);
         float w = exp(-(band * band) / 0.022);
-        float n = fbm3(dir * 3.1 + 41.0, 4) * 0.5 + 0.5;
-        float n2 = fbm3(dir * 8.5 - 13.0, 4) * 0.5 + 0.5;
+        float n = fbm3_4(dir * 3.1 + 41.0) * 0.5 + 0.5;
+        float n2 = fbm3_4(dir * 8.5 - 13.0) * 0.5 + 0.5;
         float density = w * (0.45 + 0.95 * n) * smoothstep(0.18, 0.62, n2);
         vec3 col = mix(vec3(0.45, 0.55, 0.92), vec3(0.92, 0.82, 0.72), n);
         // faint magenta tint in dense knots
@@ -302,7 +331,7 @@ function createCelestialMaterial(settings) {
       // Kept low-frequency so the surface reads as soft, hazy plains rather than
       // sharp, cratered detail — the moon intentionally looks slightly out of focus.
       float moonHeight(vec3 n) {
-        return fbm3(n * 2.2 + 31.0) * 0.9 + fbm3(n * 5.0 + 7.0, 3) * 0.1;
+        return fbm3_5(n * 2.2 + 31.0) * 0.9 + fbm3_3(n * 5.0 + 7.0) * 0.1;
       }
 
       // a smooth "crater field" mask: 1 in cratered highlands, ~0 in smooth maria.
@@ -310,7 +339,7 @@ function createCelestialMaterial(settings) {
       // real Moon (maria are young, smooth basalt plains; highlands are old & saturated).
       float craterMask(vec3 n, float terra) {
         float highland = smoothstep(0.0, 0.4, terra);          // only in elevated terrain
-        float rough = smoothstep(0.2, 0.8, fbm3(n * 7.0 + 53.0, 3) * 0.5 + 0.5);
+        float rough = smoothstep(0.2, 0.8, fbm3_3(n * 7.0 + 53.0) * 0.5 + 0.5);
         return highland * rough;
       }
 
@@ -371,7 +400,7 @@ function createCelestialMaterial(settings) {
         // terrain + maria (3D noise on the sphere normal: no seam)
         float terra = moonHeight(n);
         // large, smooth maria basins — the defining dark features of the near side
-        float maria = smoothstep(0.42, 0.66, fbm3(n * 1.8 + 91.0, 4) * 0.5 + 0.5);
+        float maria = smoothstep(0.42, 0.66, fbm3_4(n * 1.8 + 91.0) * 0.5 + 0.5);
         float gate = craterMask(n, terra) * (1.0 - maria * 0.9);
         float craters = moonCraters(n, gate);
 
@@ -453,16 +482,16 @@ function createCelestialMaterial(settings) {
         float lambert = max(0.0, lit);
 
         // surface features (3D noise -> no seam)
-        float terrain = fbm3(n * 4.0 + pid * 11.0, 4) * 0.5 + 0.5;
-        float detail = fbm3(n * 16.0 + pid * 5.0, 3) * 0.5 + 0.5;
+        float terrain = fbm3_4(n * 4.0 + pid * 11.0) * 0.5 + 0.5;
+        float detail = fbm3_3(n * 16.0 + pid * 5.0) * 0.5 + 0.5;
         vec3 rocky = mix(uPlanetColorB[index], uPlanetColorA[index], smoothstep(0.32, 0.68, terrain * 0.8 + detail * 0.2));
 
         // domain-warped gas-giant banding
-        float warp = fbm3(n * 3.0 + pid * 17.0, 3);
+        float warp = fbm3_3(n * 3.0 + pid * 17.0);
         float lat = n.y + warp * 0.35;
-        float flow = fbm3(n * 2.2 + pid * 3.0 + vec3(0.0, uTime * 0.015, 0.0), 3) * 0.5 + 0.5;
+        float flow = fbm3_3(n * 2.2 + pid * 3.0 + vec3(0.0, uTime * 0.015, 0.0)) * 0.5 + 0.5;
         float bandPattern = sin((lat + flow * 0.25) * 22.0) * 0.5 + 0.5;
-        float turb = fbm3(n * 9.0 + pid * 7.0, 4) * 0.5 + 0.5;
+        float turb = fbm3_4(n * 9.0 + pid * 7.0) * 0.5 + 0.5;
         vec3 gas = mix(uPlanetColorB[index], uPlanetColorA[index], 0.42 + 0.58 * bandPattern);
         gas *= (0.82 + 0.32 * turb);
 
