@@ -1,9 +1,9 @@
-# metaverse-celestials
+# metaverse-celestial
 
 Shader-based moon, planets, and stars for Three.js metaverse skies.
 
 ```js
-import { CelestialBodies } from 'metaverse-celestials';
+import { CelestialBodies } from 'metaverse-celestial';
 
 const celestials = new CelestialBodies({ scene, camera }).init();
 

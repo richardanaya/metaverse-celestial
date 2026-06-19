@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { CelestialBodies } from 'metaverse-celestials';
+import { CelestialBodies } from 'metaverse-celestial';
 
 const canvas = document.querySelector('#scene');
 const scene = new THREE.Scene();

@@ -1,5 +1,5 @@
 {
-  "name": "metaverse-celestials",
+  "name": "metaverse-celestial",
   "version": "0.1.0",
   "description": "Shader-based moon, planets, and stars for Three.js metaverse skies",
   "type": "module",
