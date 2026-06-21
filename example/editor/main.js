@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CelestialBodies } from 'metaverse-celestial';
 
@@ -9,7 +9,8 @@ scene.background = new THREE.Color(0x050912);
 const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 900);
 camera.position.set(0, 18, 70);
 
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+const renderer = new THREE.WebGPURenderer({ canvas, antialias: true });
+await renderer.init();
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
